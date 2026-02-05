@@ -1,0 +1,104 @@
+name: Build Map Pool
+run-name: ${{ inputs.VERSION != '' && format('{0} · Build Map Pool', inputs.VERSION) || format('{0} · Build Map Pool', vars.VERSION) }}
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      VERSION:
+        description: "版本号（例如 v8.07a）"
+        required: false
+        default: ""
+      VERSION_DATE:
+        description: "版本日期（例如 2024-03-18 或 2024/3/18）"
+        required: false
+        default: ""
+      RETURNING:
+        description: "回归地图（中文名，顿号/逗号/空格分隔，不支持换行）"
+        required: false
+        default: ""
+      ADDING:
+        description: "新增地图（中文名，顿号/逗号/空格分隔，不支持换行）"
+        required: false
+        default: ""
+      ROTATED_OUT:
+        description: "轮出地图（中文名，顿号/逗号/空格分隔，不支持换行）"
+        required: false
+        default: ""
+
+concurrency:
+  group: build-map-pool
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Enforce last failure lock
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.VERSION != '' && inputs.VERSION || vars.VERSION }}
+        run: |
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build-map-pool.yml/runs?status=completed&per_page=1"
+          data=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$api")
+          conclusion=$(echo "$data" | jq -r '.workflow_runs[0].conclusion // ""')
+          title=$(echo "$data" | jq -r '.workflow_runs[0].display_title // ""')
+          if [ "$conclusion" = "failure" ]; then
+            failed_version=$(echo "$title" | sed -n 's/^\(v[^ ]*\) · Build Map Pool.*$/\1/p')
+            if [ -z "$failed_version" ]; then
+              echo "ERROR: previous run failed; rerun the failed version first."
+              exit 1
+            fi
+            if [ -z "$VERSION" ]; then
+              echo "ERROR: previous run failed for $failed_version; set VERSION and rerun that version."
+              exit 1
+            fi
+            if [ "$VERSION" != "$failed_version" ]; then
+              echo "ERROR: previous run failed for $failed_version; rerun that version before $VERSION."
+              exit 1
+            fi
+          fi
+      - name: Build map pool
+        env:
+          RETURNING: ${{ inputs.RETURNING != '' && inputs.RETURNING || vars.RETURNING }}
+          ADDING: ${{ inputs.ADDING != '' && inputs.ADDING || vars.ADDING }}
+          ROTATED_OUT: ${{ inputs.ROTATED_OUT != '' && inputs.ROTATED_OUT || vars.ROTATED_OUT }}
+          VERSION: ${{ inputs.VERSION != '' && inputs.VERSION || vars.VERSION }}
+          VERSION_DATE: ${{ inputs.VERSION_DATE != '' && inputs.VERSION_DATE || vars.VERSION_DATE }}
+        run: |
+          python3 scripts/build_map_pool.py
+      - name: Sync history to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history/versions.json config/current_pool.json
+          if git diff --cached --quiet; then
+            echo "No history changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: sync history and current pool"
+          git push origin HEAD:main
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
