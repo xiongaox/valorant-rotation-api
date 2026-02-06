@@ -2,8 +2,6 @@ name: Build Map Pool
 run-name: ${{ inputs.VERSION != '' && format('{0} · Build Map Pool', inputs.VERSION) || format('{0} · Build Map Pool', vars.VERSION) }}
 
 on:
-  schedule:
-    - cron: "0 1 * * *"
   workflow_dispatch:
     inputs:
       VERSION:
